@@ -1,0 +1,13 @@
+## Сборка и результаты
+bin/
+obj/
+artifacts/
+
+## Служебные файлы Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+
+## Локальные артефакты самопроверки
+RecursiveLab.Smoke/

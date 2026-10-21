@@ -1,0 +1,9 @@
+# Нормализация переводов строк: в репозитории — LF, в рабочей копии — как удобно Windows.
+* text=auto
+
+*.cs      text diff=csharp
+*.csproj  text
+*.sln     text eol=crlf
+*.md      text
+*.png     binary
+*.ico     binary
