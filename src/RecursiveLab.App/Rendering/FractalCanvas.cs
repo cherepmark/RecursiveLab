@@ -47,6 +47,12 @@ internal sealed class FractalCanvas : Control, IRenderable
     public void Clear() => Geometry = null;
 
     /// <summary>
+    /// Градиентная раскраска отрезков по порядку обхода — делает видимым путь
+    /// фрактальной кривой (используется для кривой Гильберта).
+    /// </summary>
+    public bool UseGradientStroke { get; set; }
+
+    /// <summary>
     /// Отрисовывает текущую геометрию в произвольный Graphics заданного размера.
     /// Отдельный метод нужен и для Control.OnPaint, и для самопроверки (сохранение PNG).
     /// </summary>
@@ -116,6 +122,12 @@ internal sealed class FractalCanvas : Control, IRenderable
 
     private void DrawSegments(Graphics graphics, Func<PointD, PointF> map)
     {
+        if (UseGradientStroke)
+        {
+            DrawSegmentsWithGradient(graphics, map);
+            return;
+        }
+
         using var path = new GraphicsPath();
         foreach (Segment segment in _geometry!.Segments)
         {
@@ -133,6 +145,66 @@ internal sealed class FractalCanvas : Control, IRenderable
         };
 
         graphics.DrawPath(pen, path);
+    }
+
+    /// <summary>
+    /// Рисует отрезки группами, меняя оттенок по порядку обхода: начало кривой — синее,
+    /// конец — красно-оранжевое. Так видно, как кривая заполняет квадрат.
+    /// </summary>
+    private void DrawSegmentsWithGradient(Graphics graphics, Func<PointD, PointF> map)
+    {
+        const int groups = 60;
+        IReadOnlyList<Segment> segments = _geometry!.Segments;
+        int perGroup = Math.Max(1, (segments.Count + groups - 1) / groups);
+
+        for (int group = 0; group * perGroup < segments.Count; group++)
+        {
+            using var path = new GraphicsPath();
+            int start = group * perGroup;
+            int end = Math.Min(segments.Count, start + perGroup);
+
+            for (int i = start; i < end; i++)
+            {
+                path.StartFigure();
+                path.AddLine(map(segments[i].A), map(segments[i].B));
+            }
+
+            double hue = 230.0 * group / Math.Max(1, groups - 1);
+            using var pen = new Pen(ColorFromHue(hue), 1.5f)
+            {
+                StartCap = LineCap.Round,
+                EndCap = LineCap.Round,
+                LineJoin = LineJoin.Round,
+            };
+
+            graphics.DrawPath(pen, path);
+        }
+    }
+
+    /// <summary>Цвет по оттенку HSV (насыщенность и яркость подобраны для тёмного фона).</summary>
+    private static Color ColorFromHue(double hue)
+    {
+        double h = ((hue % 360) + 360) % 360 / 60.0;
+        const double saturation = 0.75;
+        const double value = 0.98;
+
+        int sector = (int)Math.Floor(h);
+        double fraction = h - sector;
+        double p = value * (1 - saturation);
+        double q = value * (1 - saturation * fraction);
+        double t = value * (1 - saturation * (1 - fraction));
+
+        (double r, double g, double b) = sector switch
+        {
+            0 => (value, t, p),
+            1 => (q, value, p),
+            2 => (p, value, t),
+            3 => (p, q, value),
+            4 => (t, p, value),
+            _ => (value, p, q),
+        };
+
+        return Color.FromArgb((int)(r * 255), (int)(g * 255), (int)(b * 255));
     }
 
     private void DrawPlaceholder(Graphics graphics, Size size)

@@ -10,6 +10,9 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Интерфейс целиком строится кодом, дизайнер WinForms не используется,
+         поэтому анализатор сериализации свойств элементов управления (WFO1000) не нужен. -->
+    <NoWarn>$(NoWarn);WFO1000</NoWarn>
   </PropertyGroup>
 
 </Project>

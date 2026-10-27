@@ -350,9 +350,16 @@ public class FractalAlgorithmTests
             Assert.Equal(kind, fractal.Kind);
             Assert.False(string.IsNullOrWhiteSpace(fractal.DisplayName));
             Assert.False(string.IsNullOrWhiteSpace(fractal.AlgorithmDescription));
-            Assert.Equal(0, fractal.MinDepth);
+            Assert.InRange(fractal.MinDepth, 0, fractal.MaxDepth);
             Assert.True(fractal.MaxDepth > 0);
         }
+
+        // У фракталов, которые строятся дроблением фигуры, базовый случай — нулевая глубина,
+        // а у кривой Гильберта порядок 0 вырожден (одна точка), поэтому минимум равен 1.
+        Assert.Equal(0, FractalCatalog.Get(FractalKind.SierpinskiTriangle).MinDepth);
+        Assert.Equal(0, FractalCatalog.Get(FractalKind.KochSnowflake).MinDepth);
+        Assert.Equal(0, FractalCatalog.Get(FractalKind.FractalTree).MinDepth);
+        Assert.Equal(1, FractalCatalog.Get(FractalKind.HilbertCurve).MinDepth);
     }
 
     [Fact]

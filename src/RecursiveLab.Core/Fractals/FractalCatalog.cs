@@ -12,6 +12,7 @@ public static class FractalCatalog
         new SierpinskiTriangleFractal(),
         new KochSnowflakeFractal(),
         new FractalTreeFractal(),
+        new HilbertCurveFractal(),
     ];
 
     /// <summary>Все доступные фракталы в порядке отображения в интерфейсе.</summary>

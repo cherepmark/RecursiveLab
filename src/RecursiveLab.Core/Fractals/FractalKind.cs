@@ -11,4 +11,7 @@ public enum FractalKind
 
     /// <summary>Фрактальное дерево — рекурсивное ветвление с уменьшением длины.</summary>
     FractalTree = 2,
+
+    /// <summary>Кривая Гильберта — рекурсия с параметром глубины и ориентации.</summary>
+    HilbertCurve = 3,
 }

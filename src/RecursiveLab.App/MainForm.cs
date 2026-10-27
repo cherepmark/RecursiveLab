@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Windows.Forms;
 using RecursiveLab.App.Views;
+using RecursiveLab.App.Views.Individual;
 
 namespace RecursiveLab.App;
 
@@ -26,6 +27,7 @@ internal sealed class MainForm : Form
 
         FractalPage = new FractalView();
         HanoiPage = new HanoiView();
+        IndividualPage = new IndividualAlgorithmsView();
 
         var root = new TableLayoutPanel
         {
@@ -51,12 +53,24 @@ internal sealed class MainForm : Form
     /// <summary>Страница Ханойской башни (используется самопроверкой).</summary>
     internal HanoiView HanoiPage { get; }
 
+    /// <summary>Страница самостоятельных алгоритмов (используется самопроверкой).</summary>
+    internal IndividualAlgorithmsView IndividualPage { get; }
+
     /// <summary>Текст строки состояния главного окна.</summary>
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     internal string StatusText
     {
         get => _statusLabel.Text ?? string.Empty;
         set => _statusLabel.Text = value ?? string.Empty;
+    }
+
+    /// <summary>Переключает вкладку главного окна (используется самопроверкой).</summary>
+    internal void SelectPage(int index)
+    {
+        if (index >= 0 && index < _tabs.TabPages.Count)
+        {
+            _tabs.SelectedIndex = index;
+        }
     }
 
     private Control BuildHeader()
@@ -112,6 +126,7 @@ internal sealed class MainForm : Form
 
         _tabs.TabPages.Add(CreatePage("Фракталы", FractalPage));
         _tabs.TabPages.Add(CreatePage("Ханойская башня", HanoiPage));
+        _tabs.TabPages.Add(CreatePage("Самостоятельные алгоритмы", IndividualPage));
         _tabs.TabPages.Add(CreatePage("Как это работает", new TheoryView()));
 
         _tabs.SelectedIndexChanged += (_, _) => UpdateStatusForSelectedTab();
@@ -155,6 +170,7 @@ internal sealed class MainForm : Form
         {
             0 => "Фракталы: выберите вид, задайте глубину рекурсии и нажмите «Построить».",
             1 => "Ханойская башня: выберите способ решения, нажмите «Решить», затем «Следующий ход» или «Авто».",
+            2 => "Самостоятельные алгоритмы: Флойд — Уоршелл, кривая Гильберта и Штрассен.",
             _ => "Справка: описание рекурсивных алгоритмов, базовых случаев и замены рекурсии явным стеком.",
         };
     }

@@ -18,11 +18,15 @@ internal static class RenderProbe
     /// <param name="CenterOfMassX">Центр тяжести закрашенных пикселей по горизонтали (доля ширины, 0..1).</param>
     /// <param name="HalfBalance">Дисбаланс половин: (левая − правая) / всего, от −1 до 1.</param>
     /// <param name="MirrorMismatch">Доля закрашенных пикселей без зеркального «двойника».</param>
+    /// <param name="PaintedWidthFraction">Ширина закрашенной области (доля ширины холста).</param>
+    /// <param name="PaintedHeightFraction">Высота закрашенной области (доля высоты холста).</param>
     public readonly record struct Analysis(
         int PaintedPixels,
         double CenterOfMassX,
         double HalfBalance,
-        double MirrorMismatch);
+        double MirrorMismatch,
+        double PaintedWidthFraction,
+        double PaintedHeightFraction);
 
     /// <summary>Считает закрашенным пиксель, отличающийся от фона заметнее этого порога.</summary>
     private const int PaintThreshold = 24;
@@ -53,6 +57,8 @@ internal static class RenderProbe
             int paintedCount = 0;
             int paintedLeft = 0;
             double weightedX = 0;
+            int minX = int.MaxValue, maxX = int.MinValue;
+            int minY = int.MaxValue, maxY = int.MinValue;
 
             for (int y = firstRow; y < height; y++)
             {
@@ -78,13 +84,18 @@ internal static class RenderProbe
                         {
                             paintedLeft++;
                         }
+
+                        minX = Math.Min(minX, x);
+                        maxX = Math.Max(maxX, x);
+                        minY = Math.Min(minY, y);
+                        maxY = Math.Max(maxY, y);
                     }
                 }
             }
 
             if (paintedCount == 0)
             {
-                return new Analysis(0, 0, 0, 0);
+                return new Analysis(0, 0, 0, 0, 0, 0);
             }
 
             int mismatches = 0;
@@ -107,7 +118,9 @@ internal static class RenderProbe
                 paintedCount,
                 weightedX / paintedCount / width,
                 (2.0 * paintedLeft - paintedCount) / paintedCount,
-                mismatchRatio);
+                mismatchRatio,
+                (maxX - minX + 1) / (double)width,
+                (maxY - minY + 1) / (double)height);
         }
         finally
         {
