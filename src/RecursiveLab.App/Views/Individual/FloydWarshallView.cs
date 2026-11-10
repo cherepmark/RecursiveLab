@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Windows.Forms;
 using RecursiveLab.App.Rendering;
+using RecursiveLab.Core.Recursion;
 using RecursiveLab.Core.ShortestPaths;
 
 namespace RecursiveLab.App.Views.Individual;
@@ -8,13 +9,21 @@ namespace RecursiveLab.App.Views.Individual;
 /// <summary>
 /// Страница индивидуального алгоритма «Флойд — Уоршелл».
 ///
-/// Показывает матрицу смежности графа, матрицу кратчайших расстояний и сами пути.
-/// Переключатель режимов демонстрирует переход от экспоненциальной троичной рекурсии
-/// (3^k вызовов на пару вершин) к рекурсии с мемоизацией и к классическим трём циклам.
+/// Алгоритм показан на графе: вершины и взвешенные рёбра, а также подсвеченные
+/// рёбра кратчайших путей из выбранной вершины. Переключатель «промежуточные
+/// вершины» показывает состояние алгоритма после обработки k вершин — видно,
+/// как постепенно появляются всё более короткие маршруты.
+///
+/// На второй вкладке — дерево рекурсии для выбранной пары вершин: троичное без
+/// мемоизации (3^k вызовов) и с пометкой «взято из таблицы» при мемоизации.
 /// </summary>
 internal sealed class FloydWarshallView : UserControl
 {
+    /// <summary>Ограничения схемы дерева: не больше 90 узлов, чтобы подписи читались.</summary>
+    private static readonly RecursionTreeLimits TreeLimits = new RecursionTreeLimits().With(4, 90);
     private readonly NumericUpDown _verticesBox = new();
+    private readonly NumericUpDown _stepBox = new();
+    private readonly ComboBox _sourceBox = new();
     private readonly RadioButton _naiveRadio = new();
     private readonly RadioButton _memoizedRadio = new();
     private readonly RadioButton _iterativeRadio = new();
@@ -22,16 +31,22 @@ internal sealed class FloydWarshallView : UserControl
     private readonly Button _randomButton = Theme.CreateButton("Случайный граф");
     private readonly Button _solveButton = Theme.CreateButton("Вычислить", primary: true);
     private readonly Button _compareButton = Theme.CreateButton("Сравнить все режимы");
-    private readonly MatrixCanvas _adjacencyCanvas = new();
+    private readonly GraphCanvas _graphCanvas = new();
     private readonly MatrixCanvas _distanceCanvas = new();
+    private readonly RecursionTreeCanvas _treeCanvas = new();
     private readonly ListBox _pathsList = new();
+    private readonly TabControl _sideTabs = new();
     private readonly Label _infoLabel = Theme.CreateLabel(string.Empty, font: Theme.BoldFont);
     private readonly Label _statusLabel = Theme.CreateLabel(string.Empty);
     private readonly Label _comparisonLabel = Theme.CreateLabel(string.Empty, font: Theme.MonoFont);
     private readonly Label _descriptionLabel = Theme.CreateLabel(string.Empty, muted: true, Theme.HintFont);
+    private readonly List<(int From, int To)> _pathPairs = [];
+    private readonly List<string> _pathTexts = [];
 
     private WeightedGraph _graph = WeightedGraph.CreateDemo();
+    private FloydWarshallResult? _stepResult;
     private int _randomSeed = 1;
+    private bool _updatingControls;
 
     public FloydWarshallView()
     {
@@ -64,13 +79,19 @@ internal sealed class FloydWarshallView : UserControl
         SolveSelected();
     }
 
+    internal GraphCanvas GraphView => _graphCanvas;
+
     internal MatrixCanvas DistanceCanvas => _distanceCanvas;
 
-    internal MatrixCanvas AdjacencyCanvas => _adjacencyCanvas;
+    internal RecursionTreeCanvas TreeView => _treeCanvas;
 
     internal ListBox PathsList => _pathsList;
 
     internal NumericUpDown VerticesInput => _verticesBox;
+
+    internal NumericUpDown StepInput => _stepBox;
+
+    internal ComboBox SourceSelector => _sourceBox;
 
     internal string InfoText => _infoLabel.Text;
 
@@ -78,8 +99,12 @@ internal sealed class FloydWarshallView : UserControl
 
     internal string ComparisonText => _comparisonLabel.Text;
 
+    internal FloydWarshallResult? StepResult => _stepResult;
+
     internal void SelectMode(FloydWarshallMode mode)
     {
+        _updatingControls = true;
+
         switch (mode)
         {
             case FloydWarshallMode.NaiveRecursive:
@@ -92,6 +117,9 @@ internal sealed class FloydWarshallView : UserControl
                 _iterativeRadio.Checked = true;
                 break;
         }
+
+        _updatingControls = false;
+        UpdateDescription();
     }
 
     internal FloydWarshallMode SelectedMode
@@ -110,7 +138,6 @@ internal sealed class FloydWarshallView : UserControl
     /// <summary>Загружает демонстрационный граф.</summary>
     internal void LoadDemoGraph()
     {
-        _verticesBox.Value = WeightedGraph.CreateDemo().VertexCount;
         LoadGraph(WeightedGraph.CreateDemo());
     }
 
@@ -121,7 +148,10 @@ internal sealed class FloydWarshallView : UserControl
         LoadGraph(WeightedGraph.CreateRandom((int)_verticesBox.Value, _randomSeed));
     }
 
-    /// <summary>Вычисляет кратчайшие пути выбранным способом.</summary>
+    /// <summary>
+    /// Вычисляет полное решение выбранным способом (для дерева рекурсии и сравнения)
+    /// и показывает итоговое состояние графа.
+    /// </summary>
     internal bool SolveSelected()
     {
         FloydWarshallMode mode = SelectedMode;
@@ -132,13 +162,9 @@ internal sealed class FloydWarshallView : UserControl
             FloydWarshallResult result = FloydWarshall.Solve(_graph, mode);
             stopwatch.Stop();
 
-            // Пути восстанавливаются по итеративной версии — она же служит эталоном.
             FloydWarshallResult reference = mode == FloydWarshallMode.Iterative
                 ? result
                 : FloydWarshall.Solve(_graph, FloydWarshallMode.Iterative);
-
-            _distanceCanvas.Matrix = result.Distances;
-            FillPaths(reference);
 
             bool matches = result.Matches(reference);
 
@@ -155,6 +181,12 @@ internal sealed class FloydWarshallView : UserControl
                 matches ? StatusKind.Success : StatusKind.Error);
 
             UpdateDescription();
+            UpdateRecursionTree();
+
+            // После полного решения показываем итоговое состояние алгоритма (k = n).
+            _stepBox.Value = _graph.VertexCount;
+            UpdateStepState();
+
             return true;
         }
         catch (ArgumentOutOfRangeException exception)
@@ -202,6 +234,61 @@ internal sealed class FloydWarshallView : UserControl
         _comparisonLabel.Text = string.Join(Environment.NewLine, lines);
     }
 
+    /// <summary>Пересчитывает состояние алгоритма после k промежуточных вершин.</summary>
+    internal bool UpdateStepState()
+    {
+        try
+        {
+            _stepResult = FloydWarshall.SolveStep(_graph, (int)_stepBox.Value);
+
+            _distanceCanvas.Matrix = _stepResult.Distances;
+            _distanceCanvas.Caption = _stepResult.IsComplete
+                ? "Кратчайшие расстояния (все вершины разрешены)"
+                : $"Расстояния при промежуточных вершинах 1..{_stepResult.AllowedIntermediates}";
+
+            FillPaths();
+            HighlightGraph();
+
+            return true;
+        }
+        catch (Exception exception)
+        {
+            SetStatus($"Не удалось показать шаг алгоритма: {exception.Message}", StatusKind.Error);
+            return false;
+        }
+    }
+
+    /// <summary>Строит дерево рекурсии для выбранной пары вершин.</summary>
+    internal void UpdateRecursionTree()
+    {
+        FloydWarshallMode mode = SelectedMode;
+
+        if (mode == FloydWarshallMode.Iterative)
+        {
+            _treeCanvas.PlaceholderText = "Итеративный алгоритм не использует рекурсию: дерева вызовов нет.";
+            _treeCanvas.Clear();
+            return;
+        }
+
+        (int from, int to) = SelectedPair();
+
+        // Глубина схемы подбирается так, чтобы для небольших графов были видны
+        // даже базовые случаи, а для больших схема не превращалась в «кашу».
+        RecursionTreeLimits limits = new RecursionTreeLimits().With(
+            Math.Min(_graph.VertexCount + 1, 5),
+            TreeLimits.MaxNodes);
+
+        try
+        {
+            _treeCanvas.Tree = FloydWarshallTree.Build(_graph, mode, from, to, limits);
+        }
+        catch (Exception exception)
+        {
+            _treeCanvas.PlaceholderText = $"Дерево не построено: {exception.Message}";
+            _treeCanvas.Clear();
+        }
+    }
+
     private Control BuildSettingsPanel()
     {
         var panel = new FlowLayoutPanel
@@ -219,7 +306,7 @@ internal sealed class FloydWarshallView : UserControl
         _verticesBox.Width = 60;
         _verticesBox.Margin = new Padding(0, 2, 8, 0);
         _verticesBox.TextAlign = HorizontalAlignment.Center;
-        _verticesBox.ValueChanged += (_, _) => LoadRandomGraph();
+        _verticesBox.ValueChanged += (_, _) => OnVerticesChanged();
         panel.Controls.Add(_verticesBox);
         panel.Controls.Add(Theme.CreateLabel(
             $"от 3 до {WeightedGraph.MaxVertexCount} (без мемоизации — не больше {FloydWarshall.MaxNaiveVertexCount})",
@@ -227,7 +314,7 @@ internal sealed class FloydWarshallView : UserControl
             Theme.HintFont));
 
         panel.Controls.Add(Theme.CreateSeparator());
-        panel.Controls.Add(Theme.CreateCaption("Способ:"));
+        panel.Controls.Add(Theme.CreateCaption("Способ решения:"));
         ConfigureRadio(_naiveRadio, "Рекурсия без мемоизации", check: true);
         ConfigureRadio(_memoizedRadio, "Рекурсия с мемоизацией", check: false);
         ConfigureRadio(_iterativeRadio, "Итеративный O(n³)", check: false);
@@ -246,13 +333,7 @@ internal sealed class FloydWarshallView : UserControl
         radio.Font = Theme.BaseFont;
         radio.ForeColor = Theme.Text;
         radio.Margin = new Padding(0, 8, 14, 0);
-        radio.CheckedChanged += (_, _) =>
-        {
-            if (radio.Checked)
-            {
-                UpdateDescription();
-            }
-        };
+        radio.CheckedChanged += (_, _) => OnModeChanged();
     }
 
     private Control BuildActionsPanel()
@@ -278,6 +359,22 @@ internal sealed class FloydWarshallView : UserControl
         panel.Controls.Add(Theme.CreateSeparator());
         panel.Controls.Add(_demoButton);
         panel.Controls.Add(_randomButton);
+        panel.Controls.Add(Theme.CreateSeparator());
+
+        panel.Controls.Add(Theme.CreateCaption("Промежуточные вершины 1..k:"));
+        _stepBox.Width = 60;
+        _stepBox.Margin = new Padding(0, 2, 8, 0);
+        _stepBox.TextAlign = HorizontalAlignment.Center;
+        _stepBox.ValueChanged += (_, _) => OnStepChanged();
+        panel.Controls.Add(_stepBox);
+
+        panel.Controls.Add(Theme.CreateCaption("Пути из:"));
+        _sourceBox.DropDownStyle = ComboBoxStyle.DropDownList;
+        _sourceBox.Width = 60;
+        _sourceBox.Margin = new Padding(0, 2, 8, 0);
+        _sourceBox.SelectedIndexChanged += (_, _) => OnSourceChanged();
+        panel.Controls.Add(_sourceBox);
+
         return panel;
     }
 
@@ -286,69 +383,122 @@ internal sealed class FloydWarshallView : UserControl
         var content = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 3,
+            ColumnCount = 2,
             RowCount = 1,
             BackColor = Theme.Background,
             Margin = new Padding(0),
         };
-        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
-        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
-        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 56));
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 44));
 
-        _adjacencyCanvas.Caption = "Матрица смежности (∞ — ребра нет)";
-        _distanceCanvas.Caption = "Кратчайшие расстояния";
-
-        content.Controls.Add(Wrap(_adjacencyCanvas), 0, 0);
-        content.Controls.Add(Wrap(_distanceCanvas), 1, 0);
-        content.Controls.Add(BuildPathPanel(), 2, 0);
-        return content;
-    }
-
-    private static Control Wrap(Control child)
-    {
-        var host = new Panel
+        var graphHost = new Panel
         {
             Dock = DockStyle.Fill,
             BackColor = Theme.Surface,
             Padding = new Padding(1),
             Margin = new Padding(0, 0, 8, 0),
         };
-        host.Controls.Add(child);
-        return host;
+        graphHost.Controls.Add(_graphCanvas);
+        content.Controls.Add(graphHost, 0, 0);
+        content.Controls.Add(BuildSidePanel(), 1, 0);
+        return content;
     }
 
-    private Control BuildPathPanel()
+    private Control BuildSidePanel()
     {
-        var panel = new TableLayoutPanel
+        _sideTabs.Dock = DockStyle.Fill;
+        _sideTabs.Font = Theme.BaseFont;
+        _sideTabs.Padding = new Point(12, 5);
+        _sideTabs.Margin = new Padding(0);
+
+        _distanceCanvas.Caption = "Кратчайшие расстояния";
+        _pathsList.Dock = DockStyle.Fill;
+        _pathsList.Font = Theme.MonoFont;
+        _pathsList.BorderStyle = BorderStyle.FixedSingle;
+        _pathsList.IntegralHeight = false;
+        _pathsList.SelectionMode = SelectionMode.One;
+        _pathsList.SelectedIndexChanged += (_, _) => OnPathSelected();
+
+        _comparisonLabel.AutoSize = true;
+        _comparisonLabel.MaximumSize = new Size(420, 0);
+        _comparisonLabel.Margin = new Padding(6, 6, 0, 0);
+
+        var matricesPage = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 3,
             BackColor = Theme.Surface,
-            Padding = new Padding(10),
+            Padding = new Padding(8),
+        };
+        matricesPage.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
+        matricesPage.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        matricesPage.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
+
+        var matrixHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface, Padding = new Padding(1) };
+        matrixHost.Controls.Add(_distanceCanvas);
+
+        var pathsCaption = Theme.CreateCaption("Кратчайшие пути (выберите строку — построится дерево рекурсии)");
+        pathsCaption.Margin = new Padding(0, 8, 0, 4);
+
+        var pathsHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface, Padding = new Padding(1) };
+        pathsHost.Controls.Add(_pathsList);
+
+        matricesPage.Controls.Add(matrixHost, 0, 0);
+        matricesPage.Controls.Add(pathsCaption, 0, 1);
+        matricesPage.Controls.Add(pathsHost, 0, 2);
+
+        _descriptionLabel.AutoSize = true;
+        _descriptionLabel.MaximumSize = new Size(500, 0);
+        _descriptionLabel.Margin = new Padding(0, 0, 0, 0);
+        _comparisonLabel.AutoSize = true;
+        _comparisonLabel.MaximumSize = new Size(500, 0);
+        _comparisonLabel.Margin = new Padding(0, 6, 0, 0);
+
+        var notes = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            BackColor = Theme.Surface,
+            Padding = new Padding(10, 6, 10, 6),
             Margin = new Padding(0),
         };
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        notes.Controls.Add(_descriptionLabel);
+        notes.Controls.Add(_comparisonLabel);
 
-        var caption = Theme.CreateCaption("Кратчайшие пути (восстановлены по матрице «следующая вершина»)");
-        caption.Margin = new Padding(0, 0, 0, 6);
+        var treePage = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            BackColor = Theme.Surface,
+            Padding = new Padding(0),
+        };
+        treePage.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        treePage.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        treePage.Controls.Add(_treeCanvas, 0, 0);
+        treePage.Controls.Add(notes, 0, 1);
 
-        _pathsList.Dock = DockStyle.Fill;
-        _pathsList.Font = Theme.MonoFont;
-        _pathsList.BorderStyle = BorderStyle.FixedSingle;
-        _pathsList.IntegralHeight = false;
-        _pathsList.SelectionMode = SelectionMode.None;
+        _sideTabs.TabPages.Add(CreatePage("Матрица и пути", matricesPage));
+        _sideTabs.TabPages.Add(CreatePage("Дерево рекурсии", treePage));
+        return _sideTabs;
+    }
 
-        _comparisonLabel.AutoSize = true;
-        _comparisonLabel.MaximumSize = new Size(520, 0);
-        _comparisonLabel.Margin = new Padding(0, 8, 0, 0);
+    private static TabPage CreatePage(string title, Control content)
+    {
+        var page = new TabPage(title)
+        {
+            BackColor = Theme.Surface,
+            Padding = new Padding(0),
+            UseVisualStyleBackColor = false,
+        };
 
-        panel.Controls.Add(caption, 0, 0);
-        panel.Controls.Add(_pathsList, 0, 1);
-        panel.Controls.Add(_comparisonLabel, 0, 2);
-        return panel;
+        content.Dock = DockStyle.Fill;
+        page.Controls.Add(content);
+        return page;
     }
 
     private Control BuildStatusPanel()
@@ -359,21 +509,17 @@ internal sealed class FloydWarshallView : UserControl
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 1,
-            RowCount = 3,
+            RowCount = 2,
             BackColor = Theme.Surface,
             Padding = new Padding(12, 8, 12, 10),
             Margin = new Padding(0),
         };
 
         _infoLabel.Margin = new Padding(0, 0, 0, 2);
-        _statusLabel.Margin = new Padding(0, 0, 0, 4);
-        _descriptionLabel.AutoSize = true;
-        _descriptionLabel.MaximumSize = new Size(1100, 0);
-        _descriptionLabel.Margin = new Padding(0);
+        _statusLabel.Margin = new Padding(0, 0, 0, 0);
 
         panel.Controls.Add(_infoLabel, 0, 0);
         panel.Controls.Add(_statusLabel, 0, 1);
-        panel.Controls.Add(_descriptionLabel, 0, 2);
         return panel;
     }
 
@@ -383,24 +529,48 @@ internal sealed class FloydWarshallView : UserControl
         _verticesBox.Maximum = WeightedGraph.MaxVertexCount;
         _verticesBox.Value = 6;
 
+        _stepBox.Minimum = 0;
+        _stepBox.Maximum = WeightedGraph.MaxVertexCount;
+        _stepBox.Value = 0;
+
         UpdateDescription();
     }
 
     private void LoadGraph(WeightedGraph graph)
     {
         _graph = graph;
-        _adjacencyCanvas.Matrix = graph.ToAdjacencyMatrix();
+        _graphCanvas.Graph = graph;
         _distanceCanvas.Clear();
         _pathsList.Items.Clear();
+        _pathPairs.Clear();
+        _pathTexts.Clear();
         _comparisonLabel.Text = string.Empty;
         _infoLabel.Text = string.Empty;
+
+        _stepBox.Value = Math.Min(graph.VertexCount, _stepBox.Maximum);
+
+        _sourceBox.Items.Clear();
+        for (int vertex = 0; vertex < graph.VertexCount; vertex++)
+        {
+            _sourceBox.Items.Add(WeightedGraph.VertexName(vertex));
+        }
+
+        _sourceBox.SelectedIndex = 0;
         SetStatus("Граф загружен. Нажмите «Вычислить».", StatusKind.Hint);
     }
 
-    private void FillPaths(FloydWarshallResult result)
+    private void FillPaths()
     {
+        if (_stepResult is null)
+        {
+            return;
+        }
+
+        int selected = _pathsList.SelectedIndex;
+
         _pathsList.BeginUpdate();
         _pathsList.Items.Clear();
+        _pathPairs.Clear();
 
         for (int from = 0; from < _graph.VertexCount; from++)
         {
@@ -412,13 +582,108 @@ internal sealed class FloydWarshallView : UserControl
                 }
 
                 string name = $"{WeightedGraph.VertexName(from)} → {WeightedGraph.VertexName(to)}: ";
-                _pathsList.Items.Add(name + (result.IsReachable(from, to)
-                    ? result.DescribePath(from, to)
-                    : "пути нет"));
+                _pathPairs.Add((from, to));
+
+                if (_stepResult.IsReachable(from, to))
+                {
+                    _pathsList.Items.Add(name + _stepResult.DescribePath(from, to));
+                }
+                else
+                {
+                    _pathsList.Items.Add(name + "пути нет (k = " + _stepResult.AllowedIntermediates + ")");
+                }
             }
         }
 
         _pathsList.EndUpdate();
+
+        if (_pathPairs.Count > 0)
+        {
+            _pathsList.SelectedIndex = Math.Clamp(selected, 0, _pathPairs.Count - 1);
+        }
+    }
+
+    private void HighlightGraph()
+    {
+        if (_stepResult is null)
+        {
+            return;
+        }
+
+        int source = Math.Max(0, _sourceBox.SelectedIndex);
+        IReadOnlyList<(int From, int To)> edges = _stepResult.ShortestPathEdges(source);
+
+        _graphCanvas.HighlightedEdges = edges;
+        _graphCanvas.SourceVertex = source;
+        _graphCanvas.ReachableVertices = _stepResult.ReachableVertices(source);
+        _graphCanvas.Note = _stepResult.IsComplete
+            ? $"Подсвечены рёбра кратчайших путей из {WeightedGraph.VertexName(source)} · решены все k = {_stepResult.AllowedIntermediates} вершин"
+            : $"Промежуточные вершины 1..{_stepResult.AllowedIntermediates} · подсвечены пути из {WeightedGraph.VertexName(source)} (рёбер: {edges.Count})";
+        _graphCanvas.Invalidate();
+    }
+
+    private (int From, int To) SelectedPair()
+    {
+        int index = _pathsList.SelectedIndex;
+        if (index >= 0 && index < _pathPairs.Count)
+        {
+            return _pathPairs[index];
+        }
+
+        return (0, Math.Max(1, Math.Min(1, _graph.VertexCount - 1)));
+    }
+
+    private void OnVerticesChanged()
+    {
+        if (_updatingControls)
+        {
+            return;
+        }
+
+        LoadGraph(WeightedGraph.CreateRandom((int)_verticesBox.Value, ++_randomSeed));
+        SolveSelected();
+    }
+
+    private void OnModeChanged()
+    {
+        if (_updatingControls)
+        {
+            return;
+        }
+
+        UpdateDescription();
+        UpdateRecursionTree();
+    }
+
+    private void OnStepChanged()
+    {
+        if (_updatingControls)
+        {
+            return;
+        }
+
+        UpdateStepState();
+    }
+
+    private void OnSourceChanged()
+    {
+        if (_updatingControls)
+        {
+            return;
+        }
+
+        HighlightGraph();
+    }
+
+    private void OnPathSelected()
+    {
+        if (_updatingControls)
+        {
+            return;
+        }
+
+        UpdateRecursionTree();
+        HighlightGraph();
     }
 
     private void UpdateDescription()

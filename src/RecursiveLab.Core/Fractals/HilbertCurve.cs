@@ -42,20 +42,23 @@ public static class HilbertCurve
     ];
 
     /// <summary>
-    /// Канонический порядок обхода четырёх подквадратов и их ориентации.
-    /// Значения — смещения подквадрата в единицах половины стороны (0 или 1)
-    /// и код ориентации подкривой, то есть симметрии, которая переводит каноническую
-    /// кривую порядка n в соответствующую подкривую:
+    /// Один подквадрат в каноническом порядке обхода: смещение в единицах половины
+    /// стороны (0 или 1) и код ориентации подкривой.
+    /// </summary>
+    public readonly record struct SubSquareOrder(int OffsetX, int OffsetY, int Orientation);
+
+    /// <summary>
+    /// Канонический порядок обхода четырёх подквадратов и их ориентации:
     /// верхний левый → код 1, нижний левый → 0, нижний правый → 0, верхний правый → 2.
     /// Такой порядок обеспечивает единичные шаги между подкривыми и совпадение
     /// начала и конца кривой с левым верхним и правым верхним углами квадрата.
     /// </summary>
-    private static readonly (int OffsetX, int OffsetY, int SubOrientation)[] SubSquares =
+    public static IReadOnlyList<SubSquareOrder> VisitOrder { get; } =
     [
-        (0, 0, 1),   // верхний левый
-        (0, 1, 0),   // нижний левый
-        (1, 1, 0),   // нижний правый
-        (1, 0, 2),   // верхний правый
+        new SubSquareOrder(0, 0, 1),   // верхний левый
+        new SubSquareOrder(0, 1, 0),   // нижний левый
+        new SubSquareOrder(1, 1, 0),   // нижний правый
+        new SubSquareOrder(1, 0, 2),   // верхний правый
     ];
 
     /// <summary>Количество допустимых ориентаций.</summary>
@@ -158,18 +161,24 @@ public static class HilbertCurve
         // меньшего порядка, а его положение и ориентация зависят от ориентации родителя.
         int half = 1 << (order - 1);
 
-        foreach ((int offsetX, int offsetY, int subOrientation) in SubSquares)
+        foreach (SubSquareOrder subSquare in VisitOrder)
         {
-            (int dx, int dy) = Transform(orientation, offsetX, offsetY);
+            (int dx, int dy) = Transform(orientation, subSquare.OffsetX, subSquare.OffsetY);
 
             Build(
                 order - 1,
-                orientation ^ subOrientation,
+                ComposeOrientation(orientation, subSquare.Orientation),
                 originX + dx * half,
                 originY + dy * half,
                 points);
         }
     }
+
+    /// <summary>
+    /// Композиция ориентаций: все четыре симметрии являются инволюциями, поэтому
+    /// результат совпадает с побитовым сложением кодов (группа Клейна).
+    /// </summary>
+    public static int ComposeOrientation(int parent, int sub) => parent ^ sub;
 
     /// <summary>
     /// Симметрия квадрата по коду ориентации. Координаты задаются в долях квадрата: 0 или 1.

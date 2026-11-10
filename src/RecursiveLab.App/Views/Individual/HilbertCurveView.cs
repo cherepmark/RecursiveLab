@@ -3,6 +3,7 @@ using System.Windows.Forms;
 using RecursiveLab.App.Rendering;
 using RecursiveLab.Core.Fractals;
 using RecursiveLab.Core.Geometry;
+using RecursiveLab.Core.Recursion;
 
 namespace RecursiveLab.App.Views.Individual;
 
@@ -10,13 +11,18 @@ namespace RecursiveLab.App.Views.Individual;
 /// Страница индивидуального алгоритма «Рекурсивное построение кривой Гильберта».
 ///
 /// Демонстрирует фрактальную рекурсию с двумя параметрами: порядком (глубиной)
-/// и ориентацией каждой из четырёх копий кривой.
+/// и ориентацией каждой из четырёх копий кривой. Справа изображается дерево рекурсии:
+/// видно, как каждый узел порождает четыре подкривые и как по уровням передаётся ориентация.
 /// </summary>
 internal sealed class HilbertCurveView : UserControl
 {
+    /// <summary>Ограничения схемы дерева: 1 + 4 + 16 = 21 узел — подписи остаются читаемыми.</summary>
+    private static readonly RecursionTreeLimits TreeLimits = new RecursionTreeLimits().With(3, 30);
+
     private readonly NumericUpDown _orderBox = new();
     private readonly ComboBox _orientationBox = new();
     private readonly FractalCanvas _canvas = new() { UseGradientStroke = true };
+    private readonly RecursionTreeCanvas _treeCanvas = new();
     private readonly Label _metricsLabel = Theme.CreateLabel(string.Empty, font: Theme.BoldFont);
     private readonly Label _checkLabel = Theme.CreateLabel(string.Empty);
     private readonly Label _statusLabel = Theme.CreateLabel(string.Empty);
@@ -44,16 +50,7 @@ internal sealed class HilbertCurveView : UserControl
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         root.Controls.Add(BuildToolbar(), 0, 0);
-
-        var canvasHost = new Panel
-        {
-            Dock = DockStyle.Fill,
-            BackColor = Theme.FractalCanvasBackground,
-            Padding = new Padding(1),
-            Margin = new Padding(0, 8, 0, 8),
-        };
-        canvasHost.Controls.Add(_canvas);
-        root.Controls.Add(canvasHost, 0, 1);
+        root.Controls.Add(BuildContentPanel(), 0, 1);
         root.Controls.Add(BuildInfoPanel(), 0, 2);
 
         Controls.Add(root);
@@ -63,6 +60,8 @@ internal sealed class HilbertCurveView : UserControl
     }
 
     internal FractalCanvas Canvas => _canvas;
+
+    internal RecursionTreeCanvas TreeView => _treeCanvas;
 
     internal NumericUpDown OrderInput => _orderBox;
 
@@ -107,6 +106,42 @@ internal sealed class HilbertCurveView : UserControl
         toolbar.Controls.Add(_buildButton);
         toolbar.Controls.Add(_clearButton);
         return toolbar;
+    }
+
+    private Control BuildContentPanel()
+    {
+        var content = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = Theme.Background,
+            Margin = new Padding(0),
+        };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
+
+        var canvasHost = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Theme.FractalCanvasBackground,
+            Padding = new Padding(1),
+            Margin = new Padding(0, 8, 8, 8),
+        };
+        canvasHost.Controls.Add(_canvas);
+
+        var treeHost = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Theme.Surface,
+            Padding = new Padding(1),
+            Margin = new Padding(0, 8, 0, 8),
+        };
+        treeHost.Controls.Add(_treeCanvas);
+
+        content.Controls.Add(canvasHost, 0, 0);
+        content.Controls.Add(treeHost, 1, 0);
+        return content;
     }
 
     private Control BuildInfoPanel()
@@ -201,6 +236,9 @@ internal sealed class HilbertCurveView : UserControl
                 : "Сверка с классическим алгоритмом d2xy: обнаружено расхождение!";
             _checkLabel.ForeColor = matches ? Theme.Success : Theme.Danger;
 
+            // Дерево рекурсии: четыре подкривые на каждом уровне и передача ориентации.
+            _treeCanvas.Tree = HilbertCurveTree.Build(order, orientation, TreeLimits);
+
             SetStatus(
                 $"Готово: порядок {order} ({HilbertCurveFractal.DescribeOrientation(orientation)}).",
                 StatusKind.Success);
@@ -209,6 +247,7 @@ internal sealed class HilbertCurveView : UserControl
         catch (FractalParameterException exception)
         {
             _canvas.Clear();
+            _treeCanvas.Clear();
             _metricsLabel.Text = string.Empty;
             _checkLabel.Text = string.Empty;
             SetStatus(exception.Message, StatusKind.Error);
@@ -217,6 +256,7 @@ internal sealed class HilbertCurveView : UserControl
         catch (Exception exception)
         {
             _canvas.Clear();
+            _treeCanvas.Clear();
             _metricsLabel.Text = string.Empty;
             _checkLabel.Text = string.Empty;
             SetStatus($"Не удалось построить кривую: {exception.Message}", StatusKind.Error);
@@ -227,6 +267,7 @@ internal sealed class HilbertCurveView : UserControl
     internal void ClearCurve()
     {
         _canvas.Clear();
+        _treeCanvas.Clear();
         _metricsLabel.Text = string.Empty;
         _checkLabel.Text = string.Empty;
         SetStatus("Холст очищен. Нажмите «Построить», чтобы построить кривую заново.", StatusKind.Hint);

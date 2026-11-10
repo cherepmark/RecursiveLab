@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Windows.Forms;
 using RecursiveLab.App.Rendering;
 using RecursiveLab.Core.Algorithms;
+using RecursiveLab.Core.Recursion;
 
 namespace RecursiveLab.App.Views.Individual;
 
@@ -16,6 +17,9 @@ internal sealed class StrassenView : UserControl
 {
     private static readonly int[] Thresholds = [1, 2, 4, 8, 16, 32];
 
+    /// <summary>Ограничения схемы дерева: 1 + 7 + 49 = 57 узлов — подписи остаются читаемыми.</summary>
+    private static readonly RecursionTreeLimits TreeLimits = new RecursionTreeLimits().With(3, 60);
+
     private readonly NumericUpDown _sizeBox = new();
     private readonly ComboBox _thresholdBox = new();
     private readonly Button _randomButton = Theme.CreateButton("Случайные матрицы");
@@ -23,6 +27,7 @@ internal sealed class StrassenView : UserControl
     private readonly MatrixCanvas _classicCanvas = new();
     private readonly MatrixCanvas _strassenCanvas = new();
     private readonly MatrixCanvas _differenceCanvas = new() { HighlightZeroMatrix = true };
+    private readonly RecursionTreeCanvas _treeCanvas = new();
     private readonly Label _infoLabel = Theme.CreateLabel(string.Empty, font: Theme.BoldFont);
     private readonly Label _statusLabel = Theme.CreateLabel(string.Empty);
     private readonly Label _descriptionLabel = Theme.CreateLabel(string.Empty, muted: true, Theme.HintFont);
@@ -69,6 +74,8 @@ internal sealed class StrassenView : UserControl
 
     internal MatrixCanvas DifferenceCanvas => _differenceCanvas;
 
+    internal RecursionTreeCanvas TreeView => _treeCanvas;
+
     internal string InfoText => _infoLabel.Text;
 
     internal string StatusText => _statusLabel.Text;
@@ -106,6 +113,7 @@ internal sealed class StrassenView : UserControl
     internal bool Multiply()
     {
         int threshold = Threshold;
+        int size = (int)_sizeBox.Value;
 
         try
         {
@@ -128,8 +136,13 @@ internal sealed class StrassenView : UserControl
             _strassenCanvas.Matrix = strassen.Product;
             _differenceCanvas.Matrix = difference;
 
+            // Дерево рекурсии строится для того размера, который реально обрабатывается
+            // алгоритмом: нечётные размеры дополняются нулями до степени двойки.
+            int padded = NextPowerOfTwo(size);
+            _treeCanvas.Tree = StrassenTree.Build(padded, threshold, TreeLimits);
+            _treeCanvas.PlaceholderText = "Дерево рекурсии не построено";
+
             bool equal = Matrix.AreEqual(classic.Product, strassen.Product);
-            int size = (int)_sizeBox.Value;
             long classicTheoretical = (long)size * size * size;
 
             _infoLabel.Text =
@@ -225,22 +238,45 @@ internal sealed class StrassenView : UserControl
         var content = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 3,
-            RowCount = 1,
+            ColumnCount = 1,
+            RowCount = 2,
             BackColor = Theme.Background,
             Margin = new Padding(0),
         };
-        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
-        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
-        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
+        content.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
+        content.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
+
+        var matrices = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 1,
+            BackColor = Theme.Background,
+            Margin = new Padding(0, 0, 0, 8),
+        };
+        matrices.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
+        matrices.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
+        matrices.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
 
         _classicCanvas.Caption = "Классический алгоритм O(n³)";
         _strassenCanvas.Caption = "Алгоритм Штрассена (7 рекурсивных умножений)";
         _differenceCanvas.Caption = "Разность результатов (должна быть нулевой)";
 
-        content.Controls.Add(Wrap(_classicCanvas), 0, 0);
-        content.Controls.Add(Wrap(_strassenCanvas), 1, 0);
-        content.Controls.Add(Wrap(_differenceCanvas, last: true), 2, 0);
+        matrices.Controls.Add(Wrap(_classicCanvas), 0, 0);
+        matrices.Controls.Add(Wrap(_strassenCanvas), 1, 0);
+        matrices.Controls.Add(Wrap(_differenceCanvas, last: true), 2, 0);
+
+        var treeHost = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Theme.Surface,
+            Padding = new Padding(1),
+            Margin = new Padding(0),
+        };
+        treeHost.Controls.Add(_treeCanvas);
+
+        content.Controls.Add(matrices, 0, 0);
+        content.Controls.Add(treeHost, 0, 1);
         return content;
     }
 
@@ -298,9 +334,22 @@ internal sealed class StrassenView : UserControl
             + "Матрицы дополняются нулями до степени двойки, поэтому поддерживаются и нечётные размеры.";
     }
 
+    /// <summary>Ближайшая степень двойки — до неё дополняются матрицы внутри Штрассена.</summary>
+    private static int NextPowerOfTwo(int value)
+    {
+        int result = 1;
+        while (result < value)
+        {
+            result <<= 1;
+        }
+
+        return result;
+    }
+
     private static double[,] Subtract(double[,] left, double[,] right)
     {
         var result = new double[left.GetLength(0), left.GetLength(1)];
+
         for (int i = 0; i < left.GetLength(0); i++)
         {
             for (int j = 0; j < left.GetLength(1); j++)

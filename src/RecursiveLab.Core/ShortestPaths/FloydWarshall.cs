@@ -28,7 +28,8 @@ public sealed class FloydWarshallResult
         double[,] distances,
         long recursiveCalls,
         int[,]? nextHop,
-        TimeSpan elapsed)
+        TimeSpan elapsed,
+        int? allowedIntermediates = null)
     {
         Mode = mode;
         VertexCount = vertexCount;
@@ -36,6 +37,7 @@ public sealed class FloydWarshallResult
         RecursiveCallCount = recursiveCalls;
         NextHop = nextHop;
         Elapsed = elapsed;
+        AllowedIntermediates = allowedIntermediates ?? vertexCount;
     }
 
     public FloydWarshallMode Mode { get; }
@@ -43,6 +45,15 @@ public sealed class FloydWarshallResult
     public string ModeName => FloydWarshall.ModeName(Mode);
 
     public int VertexCount { get; }
+
+    /// <summary>
+    /// Сколько первых вершин разрешено использовать как промежуточные.
+    /// Для полностью решённой задачи равно <see cref="VertexCount"/>.
+    /// </summary>
+    public int AllowedIntermediates { get; }
+
+    /// <summary>Задача решена полностью (обработаны все вершины как промежуточные).</summary>
+    public bool IsComplete => AllowedIntermediates >= VertexCount;
 
     /// <summary>Матрица кратчайших расстояний (∞ — пути нет).</summary>
     public double[,] Distances { get; }
@@ -64,6 +75,69 @@ public sealed class FloydWarshallResult
     /// <summary>Совпадают ли матрицы расстояний с другим результатом.</summary>
     public bool Matches(FloydWarshallResult other)
         => other is not null && Matrix.AreEqual(Distances, other.Distances);
+
+    /// <summary>
+    /// Вершины, достижимые из <paramref name="source"/> (сама вершина тоже входит в набор).
+    /// </summary>
+    public IReadOnlyCollection<int> ReachableVertices(int source)
+    {
+        var reachable = new List<int>();
+
+        for (int vertex = 0; vertex < VertexCount; vertex++)
+        {
+            if (vertex == source || IsReachable(source, vertex))
+            {
+                reachable.Add(vertex);
+            }
+        }
+
+        return reachable;
+    }
+
+    /// <summary>
+    /// Рёбра, входящие в кратчайшие пути из вершины <paramref name="source"/> ко всем
+    /// достижимым вершинам. Используется для подсветки путей на графе.
+    /// </summary>
+    public IReadOnlyList<(int From, int To)> ShortestPathEdges(int source)
+    {
+        var edges = new List<(int From, int To)>();
+
+        if (NextHop is null || source < 0 || source >= VertexCount)
+        {
+            return edges;
+        }
+
+        var seen = new HashSet<(int From, int To)>();
+
+        for (int target = 0; target < VertexCount; target++)
+        {
+            if (target == source || !IsReachable(source, target))
+            {
+                continue;
+            }
+
+            int current = source;
+            int guard = 0;
+
+            while (current != target && guard++ <= VertexCount)
+            {
+                int next = NextHop[current, target];
+                if (next < 0)
+                {
+                    break;
+                }
+
+                if (seen.Add((current, next)))
+                {
+                    edges.Add((current, next));
+                }
+
+                current = next;
+            }
+        }
+
+        return edges;
+    }
 
     /// <summary>
     /// Восстанавливает кратчайший путь по матрице «следующая вершина»
@@ -190,7 +264,7 @@ public static class FloydWarshall
                 break;
 
             case FloydWarshallMode.Iterative:
-                distances = SolveIterative(graph, out nextHop);
+                distances = SolveIterative(graph, graph.VertexCount, out nextHop);
                 break;
 
             default:
@@ -314,7 +388,39 @@ public static class FloydWarshall
     // 3. Итеративный алгоритм (эталон + восстановление путей)
     // -----------------------------------------------------------------------
 
-    private static double[,] SolveIterative(WeightedGraph graph, out int[,] nextHop)
+    /// <summary>
+    /// Промежуточное состояние алгоритма: как промежуточные разрешены только первые
+    /// <paramref name="allowedIntermediates"/> вершин. При k = 0 расстояния равны прямым
+    /// рёбрам, при k = n получается полное решение. Такой пошаговый просмотр удобно
+    /// показывать на графе: видно, как появляются всё более короткие маршруты.
+    /// </summary>
+    public static FloydWarshallResult SolveStep(WeightedGraph graph, int allowedIntermediates)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+
+        if (allowedIntermediates < 0 || allowedIntermediates > graph.VertexCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(allowedIntermediates),
+                allowedIntermediates,
+                $"Число промежуточных вершин должно быть от 0 до {graph.VertexCount}.");
+        }
+
+        var stopwatch = Stopwatch.StartNew();
+        double[,] distances = SolveIterative(graph, allowedIntermediates, out int[,] nextHop);
+        stopwatch.Stop();
+
+        return new FloydWarshallResult(
+            FloydWarshallMode.Iterative,
+            graph.VertexCount,
+            distances,
+            recursiveCalls: 0,
+            nextHop,
+            stopwatch.Elapsed,
+            allowedIntermediates);
+    }
+
+    private static double[,] SolveIterative(WeightedGraph graph, int allowedIntermediates, out int[,] nextHop)
     {
         int n = graph.VertexCount;
         double[,] distances = graph.ToAdjacencyMatrix();
@@ -328,7 +434,7 @@ public static class FloydWarshall
             }
         }
 
-        for (int k = 0; k < n; k++)
+        for (int k = 0; k < allowedIntermediates; k++)
         {
             for (int i = 0; i < n; i++)
             {

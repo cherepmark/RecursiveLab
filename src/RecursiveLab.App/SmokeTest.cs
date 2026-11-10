@@ -8,6 +8,7 @@ using RecursiveLab.App.Views.Individual;
 using RecursiveLab.Core.Algorithms;
 using RecursiveLab.Core.Fractals;
 using RecursiveLab.Core.Hanoi;
+using RecursiveLab.Core.Recursion;
 using RecursiveLab.Core.ShortestPaths;
 
 namespace RecursiveLab.App;
@@ -376,8 +377,10 @@ internal static class SmokeTest
         await SettleAsync();
         Check(
             "[Флойд—Уоршелл] холст получил размеры после переключения вкладки",
-            individual.FloydWarshallPage.DistanceCanvas.ClientSize is { Width: > 200, Height: > 150 },
-            $"{individual.FloydWarshallPage.DistanceCanvas.ClientSize.Width}×{individual.FloydWarshallPage.DistanceCanvas.ClientSize.Height}");
+            individual.FloydWarshallPage.GraphView.ClientSize is { Width: > 200, Height: > 150 },
+            $"граф {individual.FloydWarshallPage.GraphView.ClientSize.Width}×{individual.FloydWarshallPage.GraphView.ClientSize.Height}, "
+            + $"страница {individual.FloydWarshallPage.ClientSize.Width}×{individual.FloydWarshallPage.ClientSize.Height}, "
+            + $"дерево {individual.FloydWarshallPage.TreeView.ClientSize.Width}×{individual.FloydWarshallPage.TreeView.ClientSize.Height}");
 
         CheckFloydWarshall(individual.FloydWarshallPage, outputDirectory, report, Check);
 
@@ -415,6 +418,7 @@ internal static class SmokeTest
 
         FloydWarshallResult reference = FloydWarshall.Solve(WeightedGraph.CreateDemo(), FloydWarshallMode.Iterative);
         view.LoadDemoGraph();
+        view.SolveSelected();
 
         foreach (FloydWarshallMode mode in Enum.GetValues<FloydWarshallMode>())
         {
@@ -430,18 +434,47 @@ internal static class SmokeTest
                 view.InfoText);
         }
 
+        // Состояние алгоритма при разных k: сначала только прямые рёбра, затем полное решение.
+        view.StepInput.Value = 0;
+        FloydWarshallResult? stepZero = view.StepResult;
+        Check(
+            "[Флойд—Уоршелл] шаг k = 0 показывает прямые рёбра",
+            stepZero is { AllowedIntermediates: 0 }
+            && Matrix.AreEqual(stepZero.Distances, WeightedGraph.CreateDemo().ToAdjacencyMatrix()),
+            $"k = {stepZero?.AllowedIntermediates}");
+
+        view.StepInput.Value = 2;
+        FloydWarshallResult? stepTwo = view.StepResult;
+        Check(
+            "[Флойд—Уоршелл] шаг k = 2 даёт A → C = 3",
+            stepTwo is not null && Math.Abs(stepTwo.Distance(0, 2) - 3) < 1e-9,
+            $"A → C = {stepTwo?.Distance(0, 2):0.##}");
+
+        // Полное решение: подсвеченные пути на графе и список из 30 пар.
+        view.StepInput.Value = 6;
+        view.SolveSelected();
+
         Check(
             "[Флойд—Уоршелл] список путей заполнен",
             view.PathsList.Items.Count == 30,
             $"строк: {view.PathsList.Items.Count}");
 
-        view.CompareAllModes();
-        string comparison = view.ComparisonText;
         Check(
-            "[Флойд—Уоршелл] сравнение трёх режимов",
-            comparison.Split(Environment.NewLine).Length == 3
-            && comparison.Split("совпадение: да").Length == 4,
-            comparison.Replace(Environment.NewLine, " | ", StringComparison.Ordinal));
+            "[Флойд—Уоршелл] на графе подсвечены рёбра кратчайших путей",
+            view.GraphView.HighlightedEdges.Count == 5
+            && view.GraphView.SourceVertex == 0
+            && view.GraphView.Graph is not null,
+            $"рёбер подсвечено: {view.GraphView.HighlightedEdges.Count}");
+
+        RenderProbe.Analysis? graph = SaveCanvas(
+            view.GraphView,
+            Path.Combine(outputDirectory, "floyd-warshall-graph.png"),
+            report);
+
+        Check(
+            "[Флойд—Уоршелл] граф отрисован",
+            graph is { PaintedPixels: > 2000 },
+            $"{graph?.PaintedPixels ?? 0} пикселей");
 
         RenderProbe.Analysis? distances = SaveCanvas(
             view.DistanceCanvas,
@@ -450,8 +483,53 @@ internal static class SmokeTest
 
         Check(
             "[Флойд—Уоршелл] матрица расстояний отрисована",
-            distances is { PaintedPixels: > 5000 },
+            distances is { PaintedPixels: > 2000 },
             $"{distances?.PaintedPixels ?? 0} пикселей");
+
+        // Дерево рекурсии: троичное дерево без мемоизации и пометки «из таблицы» при мемоизации.
+        view.SelectMode(FloydWarshallMode.NaiveRecursive);
+        view.UpdateRecursionTree();
+        RecursionTree? naiveTree = view.TreeView.Tree;
+
+        Check(
+            "[Флойд—Уоршелл] дерево рекурсии без мемоизации",
+            naiveTree is not null
+            && naiveTree.Root.Children.Count == 3
+            && naiveTree.NodeCount > 3
+            && naiveTree.CachedCount == 0
+            && naiveTree.TheoreticalNodeCount > 1000,
+            naiveTree?.Summary ?? "дерево не построено");
+
+        Check(
+            "[Флойд—Уоршелл] первые два уровня дерева — троичные",
+            naiveTree is not null
+            && naiveTree.Root.Children.All(child => child.Children.Count == 3 || child.Truncated),
+            $"уровней: {naiveTree?.Depth}");
+
+        SaveCanvas(view.TreeView, Path.Combine(outputDirectory, "floyd-warshall-tree-naive.png"), report);
+
+        view.SelectMode(FloydWarshallMode.MemoizedRecursive);
+        view.UpdateRecursionTree();
+        RecursionTree? memoTree = view.TreeView.Tree;
+
+        Check(
+            "[Флойд—Уоршелл] дерево рекурсии с мемоизацией помечает повторные состояния",
+            memoTree is not null
+            && memoTree.CachedCount > 0
+            && naiveTree is not null
+            && memoTree.NodeCount < naiveTree.NodeCount,
+            memoTree?.Summary ?? "дерево не построено");
+
+        SaveCanvas(view.TreeView, Path.Combine(outputDirectory, "floyd-warshall-tree-memoized.png"), report);
+
+        CheckTreeNavigation(view.TreeView, outputDirectory, report, Check);
+
+        view.SelectMode(FloydWarshallMode.Iterative);
+        view.UpdateRecursionTree();
+        Check(
+            "[Флойд—Уоршелл] итеративный режим сообщает об отсутствии рекурсии",
+            view.TreeView.Tree is null && view.TreeView.PlaceholderText.Contains("не использует рекурсию", StringComparison.Ordinal),
+            view.TreeView.PlaceholderText);
 
         // Рекурсия без мемоизации обязана отказаться от слишком большого графа.
         view.SelectMode(FloydWarshallMode.NaiveRecursive);
@@ -520,6 +598,34 @@ internal static class SmokeTest
 
         SaveCanvas(view.Canvas, Path.Combine(outputDirectory, "hilbert-curve-orientation.png"), report);
 
+        // Дерево рекурсии: четыре подкривые на каждом уровне и передача ориентации.
+        view.SelectOrientation(0);
+        view.BuildCurve(3);
+        RecursionTree? tree = view.TreeView.Tree;
+
+        Check(
+            "[Гильберт] дерево рекурсии имеет по четыре потомка",
+            tree is not null
+            && tree.Root.Children.Count == 4
+            && tree.Root.Children.All(child => child.Children.Count == 4)
+            && tree.BaseCaseCount == 16
+            && tree.TheoreticalNodeCount == 21,
+            tree?.Summary ?? "дерево не построено");
+
+        Check(
+            "[Гильберт] дерево показывает ориентации подкривых",
+            tree is not null
+            && tree.Root.Children.Select(child => child.Detail ?? string.Empty).All(detail => detail.Contains("ориентация", StringComparison.Ordinal)),
+            tree is null ? "нет дерева" : string.Join("; ", tree.Root.Children.Select(child => child.Detail)));
+
+        SaveCanvas(view.TreeView, Path.Combine(outputDirectory, "hilbert-curve-tree.png"), report);
+
+        view.BuildCurve(HilbertCurveFractal.MaximumDepth);
+        Check(
+            "[Гильберт] дерево большого порядка обрезается по размеру картинки",
+            view.TreeView.Tree is { Truncated: true } deepTree && deepTree.TheoreticalNodeCount == 5461,
+            view.TreeView.Tree?.Summary ?? "дерево не построено");
+
         bool invalid = view.BuildCurve(HilbertCurveFractal.MaximumDepth + 1);
         Check(
             "[Гильберт] отказ при недопустимом порядке",
@@ -527,7 +633,9 @@ internal static class SmokeTest
             view.StatusText);
 
         view.ClearCurve();
-        Check("[Гильберт] очистка холста", view.Canvas.Geometry is null);
+        Check(
+            "[Гильберт] очистка холстов",
+            view.Canvas.Geometry is null && view.TreeView.Tree is null);
 
         view.SelectOrientation(0);
         view.BuildCurve(5);
@@ -606,6 +714,46 @@ internal static class SmokeTest
             view.DifferenceCanvasAllZero,
             "все элементы равны нулю");
 
+        // Дерево рекурсии: семеричное ветвление и базовые случаи заданного размера.
+        view.ThresholdSelector.SelectedIndex = 1;   // порог 2
+        view.Multiply();
+        RecursionTree? tree = view.TreeView.Tree;
+
+        Check(
+            "[Штрассен] дерево рекурсии имеет по семь потомков",
+            tree is not null
+            && tree.Root.Children.Count == 7
+            && tree.Root.Children.All(child => child.Children.Count == 7)
+            && tree.BaseCaseCount == 49
+            && tree.TheoreticalNodeCount == 57
+            && !tree.Truncated,
+            tree?.Summary ?? "дерево не построено");
+
+        Check(
+            "[Штрассен] узлы дерева подписаны размерами блоков",
+            tree is not null && tree.Root.Title == "8×8" && tree.Root.Children[0].Title == "4×4",
+            tree is null ? "нет дерева" : $"{tree.Root.Title} → {tree.Root.Children[0].Title}");
+
+        SaveCanvas(view.TreeView, Path.Combine(outputDirectory, "strassen-tree.png"), report);
+
+        // Порог, при котором рекурсии нет вовсе: корень сразу базовый случай.
+        view.ThresholdSelector.SelectedIndex = 3;   // порог 8
+        view.Multiply();
+        Check(
+            "[Штрассен] при пороге 8×8 рекурсии нет",
+            view.TreeView.Tree is { NodeCount: 1, BaseCaseCount: 1 } plainTree,
+            view.TreeView.Tree?.Summary ?? "дерево не построено");
+
+        // Крупный размер: дерево обрезается, но действительный размер дерева виден в сводке.
+        view.SizeInput.Value = 32;
+        view.ThresholdSelector.SelectedIndex = 0;
+        view.Multiply();
+        Check(
+            "[Штрассен] дерево крупного размера обрезается по картинке",
+            view.TreeView.Tree is { Truncated: true } bigTree && bigTree.TheoreticalNodeCount == 19608,
+            view.TreeView.Tree?.Summary ?? "дерево не построено");
+
+        view.SizeInput.Value = 8;
         view.ThresholdSelector.SelectedIndex = 1;
         view.FillRandomMatrices();
     }
@@ -619,6 +767,103 @@ internal static class SmokeTest
     /// закрашенной области не зависят от пропорций окна, поэтому проверки устойчивы.
     /// </summary>
     private static readonly Size SquareAnalysisSize = new(600, 600);
+
+    /// <summary>
+    /// Проверки масштабирования и сдвига дерева рекурсии: в «вписанном» виде подписи узлов
+    /// мелкие, поэтому дерево можно приблизить колесом мыши и перетаскивать мышью.
+    /// </summary>
+    private static void CheckTreeNavigation(
+        RecursionTreeCanvas canvas,
+        string outputDirectory,
+        List<string> report,
+        Action<string, bool, string> check)
+    {
+        void Check(string name, bool condition, string details = "") => check(name, condition, details);
+
+        Size size = canvas.ClientSize.Width >= 80 && canvas.ClientSize.Height >= 80
+            ? canvas.ClientSize
+            : new Size(900, 600);
+
+        // «Вписанный» вид даёт холсту параметры привязки зума к точке курсора.
+        using Bitmap fittedBitmap = RenderToBitmap(canvas, size);
+        RenderProbe.Analysis? fitted = SaveCanvas(
+            canvas,
+            Path.Combine(outputDirectory, "tree-navigation-fit.png"),
+            report);
+
+        Check(
+            "[Дерево] исходный вид вписан целиком",
+            canvas.Zoom == 1.0 && !canvas.IsZoomed && fitted is { PaintedPixels: > 500 },
+            $"масштаб ×{canvas.Zoom:0.##}, пикселей {fitted?.PaintedPixels ?? 0}");
+
+        var center = new Point(size.Width / 2, size.Height / 2);
+        canvas.ZoomBy(2.5, center);
+
+        Check(
+            "[Дерево] колесо мыши приближает",
+            Math.Abs(canvas.Zoom - 2.5) < 1e-6 && canvas.IsZoomed,
+            $"масштаб ×{canvas.Zoom:0.##}");
+
+        using Bitmap zoomedBitmap = RenderToBitmap(canvas, size);
+        double zoomDifference = RenderProbe.DifferenceRatio(fittedBitmap, zoomedBitmap);
+
+        Check(
+            "[Дерево] приближенное изображение отличается от вписанного",
+            zoomDifference > 0.02,
+            $"изменилось пикселей: {zoomDifference:P1}");
+
+        SaveCanvas(canvas, Path.Combine(outputDirectory, "tree-navigation-zoomed.png"), report);
+
+        canvas.PanBy(-60, -40);
+        using Bitmap pannedBitmap = RenderToBitmap(canvas, size);
+        double panDifference = RenderProbe.DifferenceRatio(zoomedBitmap, pannedBitmap);
+
+        Check(
+            "[Дерево] перетаскивание сдвигает изображение",
+            canvas.IsZoomed && canvas.Zoom > 1 && panDifference > 0.02,
+            $"масштаб ×{canvas.Zoom:0.##}, изменилось пикселей: {panDifference:P1}");
+
+        SaveCanvas(canvas, Path.Combine(outputDirectory, "tree-navigation-panned.png"), report);
+
+        // Пределы масштаба ограничены, чтобы дерево нельзя было потерять.
+        canvas.ZoomBy(1000, center);
+        Check("[Дерево] верхний предел масштаба", canvas.Zoom <= 12.0 + 1e-6, $"×{canvas.Zoom:0.##}");
+
+        canvas.ZoomBy(1e-9, center);
+        Check("[Дерево] нижний предел масштаба", canvas.Zoom >= 0.6 - 1e-6, $"×{canvas.Zoom:0.##}");
+
+        canvas.FitToWindow();
+        Check(
+            "[Дерево] двойной щелчок возвращает вписанный вид",
+            canvas.Zoom == 1.0 && !canvas.IsZoomed,
+            $"масштаб ×{canvas.Zoom:0.##}");
+
+        using Bitmap restoredBitmap = RenderToBitmap(canvas, size);
+        double restoreDifference = RenderProbe.DifferenceRatio(fittedBitmap, restoredBitmap);
+
+        Check(
+            "[Дерево] после сброса вид совпадает с исходным",
+            restoredBitmap is not null && restoreDifference < 0.005,
+            $"отличие от исходного вида: {restoreDifference:P2}");
+    }
+
+    /// <summary>Отрисовывает холст в отдельный растр заданного размера.</summary>
+    private static Bitmap RenderToBitmap(Control canvas, Size size)
+    {
+        var bitmap = new Bitmap(size.Width, size.Height);
+
+        using Graphics graphics = Graphics.FromImage(bitmap);
+        if (canvas is IRenderable renderable)
+        {
+            renderable.Render(graphics, size);
+        }
+        else
+        {
+            canvas.DrawToBitmap(bitmap, new Rectangle(Point.Empty, size));
+        }
+
+        return bitmap;
+    }
 
     /// <summary>Ожидаемое количество примитивов — независимая формула для контроля результата.</summary>
     private static int ExpectedPrimitiveCount(FractalKind kind, int depth) => kind switch

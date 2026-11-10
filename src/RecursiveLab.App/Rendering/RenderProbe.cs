@@ -127,4 +127,67 @@ internal static class RenderProbe
             bitmap.UnlockBits(data);
         }
     }
+
+    /// <summary>
+    /// Доля различающихся пикселей двух изображений одного размера.
+    /// Нужна самопроверке, чтобы убедиться, что смена вида (масштаб, сдвиг) действительно
+    /// изменила картинку, а сброс вида вернул её к исходной.
+    /// </summary>
+    public static double DifferenceRatio(Bitmap left, Bitmap right, int threshold = PaintThreshold)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+
+        if (left.Width != right.Width || left.Height != right.Height)
+        {
+            return 1.0;
+        }
+
+        int width = left.Width;
+        int height = left.Height;
+
+        var leftData = left.LockBits(
+            new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        var rightData = right.LockBits(
+            new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+
+        try
+        {
+            var leftBuffer = new byte[leftData.Stride * height];
+            var rightBuffer = new byte[rightData.Stride * height];
+            Marshal.Copy(leftData.Scan0, leftBuffer, 0, leftBuffer.Length);
+            Marshal.Copy(rightData.Scan0, rightBuffer, 0, rightBuffer.Length);
+
+            long different = 0;
+            long total = 0;
+
+            for (int y = 0; y < height; y++)
+            {
+                int leftRow = y * leftData.Stride;
+                int rightRow = y * rightData.Stride;
+
+                for (int x = 0; x < width; x++)
+                {
+                    int offset = x * 4;
+                    int difference = Math.Abs(leftBuffer[leftRow + offset] - rightBuffer[rightRow + offset])
+                                     + Math.Abs(leftBuffer[leftRow + offset + 1] - rightBuffer[rightRow + offset + 1])
+                                     + Math.Abs(leftBuffer[leftRow + offset + 2] - rightBuffer[rightRow + offset + 2]);
+
+                    if (difference > threshold)
+                    {
+                        different++;
+                    }
+
+                    total++;
+                }
+            }
+
+            return total == 0 ? 0 : different / (double)total;
+        }
+        finally
+        {
+            left.UnlockBits(leftData);
+            right.UnlockBits(rightData);
+        }
+    }
 }

@@ -63,6 +63,21 @@ internal static class Theme
     public static readonly Font TitleFont = new("Segoe UI Semibold", 13f, FontStyle.Bold, GraphicsUnit.Point);
     public static readonly Font MonoFont = new("Consolas", 9.5f, FontStyle.Regular, GraphicsUnit.Point);
     public static readonly Font HintFont = new("Segoe UI", 9f, FontStyle.Regular, GraphicsUnit.Point);
+    public static readonly Font NodeFont = new("Segoe UI", 7.5f, FontStyle.Bold, GraphicsUnit.Point);
+    public static readonly Font NodeDetailFont = new("Segoe UI", 6.5f, FontStyle.Regular, GraphicsUnit.Point);
+    public static readonly Font GraphFont = new("Segoe UI", 8.5f, FontStyle.Bold, GraphicsUnit.Point);
+
+    // --- Палитра узлов дерева рекурсии ---
+    public static readonly Color NodeCallFill = Color.FromArgb(232, 240, 253);
+    public static readonly Color NodeCallBorder = Color.FromArgb(41, 104, 217);
+    public static readonly Color NodeBaseFill = Color.FromArgb(226, 245, 234);
+    public static readonly Color NodeBaseBorder = Color.FromArgb(19, 133, 78);
+    public static readonly Color NodeCachedFill = Color.FromArgb(240, 241, 245);
+    public static readonly Color NodeCachedBorder = Color.FromArgb(138, 143, 152);
+    public static readonly Color TreeEdge = Color.FromArgb(168, 176, 190);
+    public static readonly Color GraphEdge = Color.FromArgb(158, 166, 180);
+    public static readonly Color GraphVertexFill = Color.White;
+    public static readonly Color GraphMuted = Color.FromArgb(178, 184, 196);
 
     /// <summary>Кнопка в едином стиле. primary — акцентная (главное действие).</summary>
     public static Button CreateButton(string text, bool primary = false)
